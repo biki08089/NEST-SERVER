@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 1. Roles: Admin or Student
+enum Role {
+  ADMIN
+  STUDENT
+}
+
+// 2. User model
+model User {
+  id          Int          @id @default(autoincrement())
+  email       String       @unique
+  password    String       // Stored as bcrypt hash
+  name        String?
+  role        Role         @default(STUDENT)
+  isVerified  Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+ 
+  enrollments Enrollment[]
+}
+
+// 3. OTP table for authentication
+model Otp {
+  id        Int      @id @default(autoincrement())
+  email     String   // The email the OTP was sent to
+  code      String   // e.g. "482910"
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+// 4. Course model
+model Course {
+  id          Int          @id @default(autoincrement())
+  title       String
+  description String?
+  price       Float        @default(0.0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  enrollments Enrollment[]
+}
+
+// 5. Enrollment: Links a student to an assigned course
+model Enrollment {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  courseId   Int
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+
+  // A student can only be enrolled in the same course once
+  @@unique([userId, courseId])
+}
