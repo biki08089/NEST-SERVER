@@ -43,6 +43,28 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+
+  /**
+* Atomic increment for Rate Limiting.
+* If key does not exist, sets it to 1 and applies the TTL.
+* Returns the current count.
+*/
+  async incr(key: string, ttlSeconds?: number): Promise<number> {
+    if (!this.client) return 0;
+    try {
+      const count = await this.client.incr(key);
+      // Set TTL only on the first hit when counter is created
+      if (count === 1 && ttlSeconds) {
+        await this.client.expire(key, ttlSeconds);
+      }
+      return count;
+    } catch (err) {
+      this.logger.error(`Error incrementing key "${key}":`, err);
+      return 0;
+    }
+  }
+
+
   /**
    * Get parsed value from Redis.
    * If key does not exist or fails, returns null (Cache Miss).
