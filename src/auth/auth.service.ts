@@ -4,7 +4,10 @@ import {
     BadRequestException,
     UnauthorizedException,
     NotFoundException,
+    HttpException,
+    HttpStatus,
 } from '@nestjs/common';
+
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -15,6 +18,8 @@ import {
     LoginDto,
     VerifyLoginOtpDto,
 } from './dto/auth.dto.js';
+import { RedisService } from '../redis/redis.service.js';
+
 
 @Injectable()
 export class AuthService {
@@ -22,6 +27,7 @@ export class AuthService {
         private readonly prisma: PrismaService,
         private readonly jwtService: JwtService,
         private readonly mailService: MailService,
+        private readonly redis: RedisService,
     ) { }
 
     // Helper: generates a 6-digit numeric OTP
@@ -29,7 +35,7 @@ export class AuthService {
         return Math.floor(100000 + Math.random() * 900000).toString();
     }
 
-    // 1. Send OTP before registration
+    // 1. Send OTP before registration (Rate-limited & cached in Redis)
     async sendRegisterOtp(dto: SendOtpDto) {
         const existingUser = await this.prisma.user.findUnique({
             where: { email: dto.email },
@@ -39,26 +45,32 @@ export class AuthService {
             throw new ConflictException('An account with this email already exists.');
         }
 
+        // 🛡️ RATE LIMITING: Max 3 OTP requests per email every 5 minutes (300 seconds)
+        const rateLimitKey = `rate:otp:${dto.email}`;
+        const attempts = await this.redis.incr(rateLimitKey, 300);
+
+        if (attempts > 3) {
+            throw new HttpException(
+                'Too many OTP requests. Please wait 5 minutes before trying again.',
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
+        }
+
         const code = this.generateOtp();
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-        // Delete any old pending OTPs for this email
-        await this.prisma.otp.deleteMany({ where: { email: dto.email } });
+        // ⚡ Save OTP in Redis with 5-minute (300 seconds) TTL
+        // No more cluttering PostgreSQL!
+        await this.redis.set(`otp:register:${dto.email}`, code, 300);
 
-        // Save the new OTP
-        await this.prisma.otp.create({
-            data: {
-                email: dto.email,
-                code,
-                expiresAt,
-            },
-        });
-
-        // Send email (and logs to console)
+        // Send email
         await this.mailService.sendOtpEmail(dto.email, code);
 
-        return { message: 'Verification OTP sent to your email.' };
+        return {
+            message: 'Verification OTP sent to your email.',
+            remainingAttempts: Math.max(0, 3 - attempts),
+        };
     }
+
 
     // 2. Complete registration after OTP verification
     async register(dto: RegisterDto) {
@@ -71,18 +83,14 @@ export class AuthService {
             throw new ConflictException('An account with this email already exists.');
         }
 
-        // Verify OTP code and expiry
-        const validOtp = await this.prisma.otp.findFirst({
-            where: {
-                email: dto.email,
-                code: dto.otp,
-                expiresAt: { gt: new Date() }, // must not be expired
-            },
-        });
-
-        if (!validOtp) {
+        // Verify OTP from Redis
+        const redisOtpKey = `otp:register:${dto.email}`;
+        const storedOtp = await this.redis.get<string>(redisOtpKey);
+        if (!storedOtp || storedOtp !== dto.otp) {
             throw new BadRequestException('Invalid or expired OTP.');
         }
+        // Valid! Delete OTP from Redis so it cannot be reused
+        await this.redis.del(redisOtpKey);
 
         // Hash the password with bcrypt (salt rounds = 10)
         const hashedPassword = await bcrypt.hash(dto.password, 10);
