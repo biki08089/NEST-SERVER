@@ -1,118 +1,164 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 🎓 NestJS Course & Learning Management Server
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A robust, modular, and production-ready E-Learning backend built with [NestJS](https://nestjs.com/), [Prisma ORM](https://www.prisma.io/), [PostgreSQL](https://www.postgresql.org/), and [Redis](https://redis.io/).
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+---
 
-## Description
+## 🛠️ Technology Stack
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+* **Framework:** NestJS (Node.js & TypeScript, ES Modules)
+* **Database & ORM:** PostgreSQL + Prisma ORM
+* **Caching & Storage:** Redis (Upstash / `ioredis`) for high-speed course caching
+* **Authentication:** JWT (Passport-JWT) + Email OTP 2FA (Nodemailer) + bcrypt password hashing
+* **Validation:** `class-validator` + `class-transformer`
+* **Testing:** Vitest
 
-## Project setup
+---
 
-```bash
-$ npm install
+## 🏗️ Architecture & Request Lifecycle
+
+This application implements NestJS architectural building blocks:
+
+```
+Incoming Request
+       │
+1. [ LoggerMiddleware ]          --> Logs method, URL, and client IP (with route exclusions)
+       │
+2. [ Guards ]
+       ├── JwtAuthGuard          --> Verifies Bearer JWT token
+       ├── RolesGuard            --> Role-Based Access Control (@Roles(Role.ADMIN))
+       └── IsVerifiedGuard       --> Checks live PostgreSQL database for account verification
+       │
+3. [ Interceptors (Before) ]
+       ├── TimingInterceptor     --> Starts performance stopwatch
+       └── TransformInterceptor  --> Prepares standardized response envelope
+       │
+4. [ Controller & Service ]      --> Executes business logic, talks to PostgreSQL & Redis
+       │
+5. [ Interceptors (After) ]
+       ├── TimingInterceptor     --> Logs route completion time (e.g. "⚡ GET /courses completed in +3ms")
+       └── TransformInterceptor  --> Wraps output in standard JSON shape
+       │
+Outgoing Response
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ npm run start
+## ✨ Features Implemented
 
-# watch mode
-$ npm run start:dev
+### 1. Middlewares (`src/common/middleware/`)
+* **`LoggerMiddleware`**: Logs every incoming HTTP request method, URL, and client IP.
+* **Selective Exclusions**: Configured in `AppModule` using `.exclude()` to skip noisy public routes like `GET /courses` and `GET /courses/:id`.
 
-# production mode
-$ npm run start:prod
+### 2. Guards (`src/auth/guards/`)
+* **`JwtAuthGuard`**: Authenticates users using JWT Bearer tokens.
+* **`RolesGuard`**: Reads `@Roles()` metadata using NestJS `Reflector` to restrict endpoints to `ADMIN` users.
+* **`IsVerifiedGuard`**: Custom guard that injects `PrismaService` to inspect the database in real-time, blocking unverified users from sensitive actions (e.g., viewing enrolled courses).
+
+### 3. Interceptors (`src/common/interceptors/`)
+* **`TransformInterceptor`**: Registered globally in `main.ts`. Automatically standardizes all API responses into:
+  ```json
+  {
+    "success": true,
+    "statusCode": 200,
+    "data": { ... },
+    "timestamp": "2026-10-22T12:00:00.000Z"
+  }
+  ```
+* **`TimingInterceptor`**: Registered globally. Uses RxJS `tap()` to measure execution speed in milliseconds without altering the response data.
+
+### 4. Caching & Performance (`src/redis/`)
+* Courses are cached in Redis RAM with a 5-minute TTL.
+* **Automatic Cache Invalidation**: Creating, updating, or deleting courses clears the Redis cache immediately so users always see fresh data.
+* Atomic `incr()` helper ready for rate-limiting.
+
+---
+
+## 📡 API Modules & Endpoints
+
+### 🔐 Authentication (`/auth`)
+| Method | Endpoint | Description | Access |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/auth/send-register-otp` | Sends registration OTP via email | Public |
+| `POST` | `/auth/register` | Verifies OTP, hashes password & registers user | Public |
+| `POST` | `/auth/login` | Validates credentials & triggers 2FA OTP | Public |
+| `POST` | `/auth/verify-login-otp` | Verifies OTP & returns JWT access token | Public |
+
+### 👤 Users (`/users`)
+| Method | Endpoint | Description | Access |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/users/me` | Get logged-in user profile | Logged-in |
+| `GET` | `/users/my-courses` | Get enrolled courses | Verified User (`IsVerifiedGuard`) |
+| `GET` | `/users` | Get all users | Admin (`RolesGuard`) |
+| `GET` | `/users/:id` | Get user by ID | Admin (`RolesGuard`) |
+| `PATCH`| `/users/:id` | Update profile / toggle verification | Self or Admin |
+| `DELETE`| `/users/:id` | Delete user | Admin (`RolesGuard`) |
+
+### 📚 Courses (`/courses`)
+| Method | Endpoint | Description | Access |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/courses` | List all courses (Cached in Redis) | Public |
+| `GET` | `/courses/:id` | Get single course by ID (Cached) | Public |
+| `POST` | `/courses` | Create new course (Clears cache) | Admin |
+| `PATCH`| `/courses/:id` | Update course (Clears cache) | Admin |
+| `DELETE`| `/courses/:id`| Delete course (Clears cache) | Admin |
+| `POST` | `/courses/:id/assign` | Assign course to student by email | Admin |
+
+---
+
+## 🚀 Getting Started
+
+### 1. Prerequisites
+* Node.js (v20+ recommended)
+* PostgreSQL database
+* Redis instance (local or Upstash Redis URL)
+
+### 2. Environment Configuration
+Create a `.env` file in the root directory:
+
+```env
+PORT=3000
+DATABASE_URL="postgresql://user:password@localhost:5432/nest_db?schema=public"
+REDIS_URL="rediss://default:token@your-redis-host:6379"
+JWT_SECRET="yourSuperSecretKey"
+
+# Email Configuration (Nodemailer)
+SMTP_HOST="smtp.gmail.com"
+SMTP_PORT=587
+SMTP_USER="your-email@gmail.com"
+SMTP_PASS="your-app-password"
 ```
 
-## Run tests
-
+### 3. Install Dependencies
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm install
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
+### 4. Database Setup
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Push schema to database
+npx prisma db push
+
+# Generate Prisma Client
+npx prisma generate
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### 5. Run the Server
+```bash
+# Development (watch mode)
+npm run start:dev
 
-## Observability
+# Production build
+npm run build
+npm run start:prod
+```
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+---
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+## 🗺️ Upcoming Roadmap
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-This project is already instrumented. Create a free account at [observe.nestjs.com](https://observe.nestjs.com), add an application, and paste the generated app key and secret into the `ObserveModule.forRoot()` call in `src/app.module.ts`.
-
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+* [ ] **Step 1:** Global Exception Filter (standardizing all error responses).
+* [ ] **Step 2:** Custom Redis Rate-Limiter Guard (stopping OTP & auth spam).
+* [ ] **Step 3:** Course Lessons Feature & `IsEnrolledGuard` (chapters, videos, progress tracking).
+* [ ] **Step 4:** Course Reviews & Ratings System (1–5 stars and student feedback).
+* [ ] **Step 5:** Cloudinary & Multer File Uploads (course thumbnails and user avatars).

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsEnum, MinLength, IsBoolean } from 'class-validator';
 import { Role } from '@prisma/client';
 
 // DTO to update a user's profile (Admin or self)
@@ -15,4 +15,8 @@ export class UpdateUserDto {
     @IsEnum(Role)
     @IsOptional()
     role?: Role;
+
+    @IsBoolean()
+    @IsOptional()
+    isVerified?: boolean;
 }
