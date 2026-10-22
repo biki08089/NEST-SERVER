@@ -9,6 +9,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../auth/guards/roles.guard.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { Role } from '@prisma/client';
+import { IsVerifiedGuard } from '../auth/guards/is-verified.guard.js';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard) // All user routes require login
@@ -23,6 +24,7 @@ export class UsersController {
 
     // 🔐 ANY LOGGED-IN USER — Get own enrolled courses
     @Get('my-courses')
+    @UseGuards(IsVerifiedGuard)
     getMyCourses(@Request() req: any) {
         return this.usersService.getMyCourses(req.user.id);
     }
@@ -50,6 +52,7 @@ export class UsersController {
         @Param('id', ParseIntPipe) id: number,
         @Body() dto: UpdateUserDto,
     ) {
+
         return this.usersService.update(req.user.id, req.user.role, id, dto);
     }
 

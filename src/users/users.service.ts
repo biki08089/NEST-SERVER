@@ -56,11 +56,12 @@ export class UsersService {
         if (dto.name) data.name = dto.name;
         if (dto.role && requestingRole === 'ADMIN') data.role = dto.role; // only admin can change roles
         if (dto.password) data.password = await bcrypt.hash(dto.password, 10);
+        if (dto.isVerified && requestingRole === 'ADMIN') data.isVerified = dto.isVerified;
 
         return this.prisma.user.update({
             where: { id: targetId },
             data,
-            select: { id: true, email: true, name: true, role: true },
+            select: { id: true, email: true, name: true, role: true, isVerified: true },
         });
     }
 
