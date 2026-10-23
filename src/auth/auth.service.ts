@@ -143,20 +143,21 @@ export class AuthService {
             throw new UnauthorizedException('Invalid email or password.');
         }
 
+        // 🛡️ RATE LIMIT: Max 5 login OTPs per email in 5 minutes (300 seconds)
+        const rateLimitKey = `rate:login:otp:${dto.email}`;
+        const attempts = await this.redis.incr(rateLimitKey, 300);
+        if (attempts > 3) {
+            throw new HttpException(
+                'Too many login OTP requests for this account. Please wait 5 minutes before trying again.',
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
+        }
         const code = this.generateOtp();
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
-        // Delete old OTPs and create a new one
-        await this.prisma.otp.deleteMany({ where: { email: dto.email } });
-        await this.prisma.otp.create({
-            data: {
-                email: dto.email,
-                code,
-                expiresAt,
-            },
-        });
-
+        // ⚡ Save OTP in Redis with 5-minute (300s) TTL (No PostgreSQL clutter!)
+        await this.redis.set(`otp:login:${dto.email}`, code, 300);
+        // Send email
         await this.mailService.sendOtpEmail(dto.email, code);
+
 
         return {
             message: 'Login OTP sent to your email. Please verify to access your account.',
@@ -165,20 +166,13 @@ export class AuthService {
 
     // 4. Verify login OTP and return JWT
     async verifyLoginOtp(dto: VerifyLoginOtpDto) {
-        const validOtp = await this.prisma.otp.findFirst({
-            where: {
-                email: dto.email,
-                code: dto.otp,
-                expiresAt: { gt: new Date() },
-            },
-        });
-
-        if (!validOtp) {
+        const redisKey = `otp:login:${dto.email}`;
+        const cachedOtp = await this.redis.get<string>(redisKey);
+        if (!cachedOtp || cachedOtp !== dto.otp) {
             throw new BadRequestException('Invalid or expired OTP.');
         }
-
-        // Clean up OTP
-        await this.prisma.otp.deleteMany({ where: { email: dto.email } });
+        // Valid OTP! Delete it immediately from Redis so it cannot be reused
+        await this.redis.del(redisKey);
 
         const user = await this.prisma.user.findUnique({
             where: { email: dto.email },

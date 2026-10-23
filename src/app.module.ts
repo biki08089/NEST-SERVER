@@ -7,9 +7,9 @@ import { AuthModule } from './auth/auth.module.js';
 import { CoursesModule } from './courses/courses.module.js';
 import { UsersModule } from './users/users.module.js';
 import { LoggerMiddleware } from './common/middleware/logger.middleware.js';
-
+import { LessonsModule } from './lessons/lessons.module.js';
 @Module({
-  imports: [PrismaModule, RedisModule, AuthModule, CoursesModule, UsersModule],
+  imports: [PrismaModule, RedisModule, AuthModule, CoursesModule, UsersModule, LessonsModule],
   controllers: [AppController],
   providers: [AppService],
 })
