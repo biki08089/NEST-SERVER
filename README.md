@@ -8,7 +8,7 @@ A robust, modular, and production-ready E-Learning backend built with [NestJS](h
 
 * **Framework:** NestJS (Node.js & TypeScript, ES Modules)
 * **Database & ORM:** PostgreSQL + Prisma ORM
-* **Caching & Storage:** Redis (Upstash / `ioredis`) for high-speed course caching
+* **Caching & In-Memory Store:** Redis (Upstash / `ioredis`) for course caching, OTP storage, and atomic rate-limiting
 * **Authentication:** JWT (Passport-JWT) + Email OTP 2FA (Nodemailer) + bcrypt password hashing
 * **Validation:** `class-validator` + `class-transformer`
 * **Testing:** Vitest
@@ -17,7 +17,7 @@ A robust, modular, and production-ready E-Learning backend built with [NestJS](h
 
 ## 🏗️ Architecture & Request Lifecycle
 
-This application implements NestJS architectural building blocks:
+This application implements the complete NestJS architectural pipeline:
 
 ```
 Incoming Request
@@ -25,9 +25,11 @@ Incoming Request
 1. [ LoggerMiddleware ]          --> Logs method, URL, and client IP (with route exclusions)
        │
 2. [ Guards ]
-       ├── JwtAuthGuard          --> Verifies Bearer JWT token
+       ├── JwtAuthGuard          --> Verifies Bearer JWT access token
        ├── RolesGuard            --> Role-Based Access Control (@Roles(Role.ADMIN))
-       └── IsVerifiedGuard       --> Checks live PostgreSQL database for account verification
+       ├── IsVerifiedGuard       --> Checks live PostgreSQL database for account verification
+       ├── RateLimitGuard        --> IP-based sliding window rate-limiter using Redis incr()
+       └── IsEnrolledGuard       --> Verifies student enrollment before granting lesson content access
        │
 3. [ Interceptors (Before) ]
        ├── TimingInterceptor     --> Starts performance stopwatch
@@ -37,9 +39,10 @@ Incoming Request
        │
 5. [ Interceptors (After) ]
        ├── TimingInterceptor     --> Logs route completion time (e.g. "⚡ GET /courses completed in +3ms")
-       └── TransformInterceptor  --> Wraps output in standard JSON shape
+       └── TransformInterceptor  --> Standardizes response shape: { success: true, statusCode, data, timestamp }
        │
-Outgoing Response
+6. [ AllExceptionsFilter ]       --> Catches any error / crash and formats it into:
+                                     { success: false, statusCode, message, path, timestamp }
 ```
 
 ---
@@ -50,38 +53,54 @@ Outgoing Response
 * **`LoggerMiddleware`**: Logs every incoming HTTP request method, URL, and client IP.
 * **Selective Exclusions**: Configured in `AppModule` using `.exclude()` to skip noisy public routes like `GET /courses` and `GET /courses/:id`.
 
-### 2. Guards (`src/auth/guards/`)
+### 2. Guards & Security (`src/common/guards/` & `src/auth/guards/`)
 * **`JwtAuthGuard`**: Authenticates users using JWT Bearer tokens.
 * **`RolesGuard`**: Reads `@Roles()` metadata using NestJS `Reflector` to restrict endpoints to `ADMIN` users.
-* **`IsVerifiedGuard`**: Custom guard that injects `PrismaService` to inspect the database in real-time, blocking unverified users from sensitive actions (e.g., viewing enrolled courses).
+* **`IsVerifiedGuard`**: Custom guard checking the database in real-time, blocking unverified accounts from sensitive operations.
+* **`RateLimitGuard`**: Custom IP rate-limiter reading `@Throttle({ limit, ttl })` metadata and utilizing atomic Redis `incr()` with TTL to block brute-force and DDoS attempts (HTTP 429).
+* **`IsEnrolledGuard`**: Checks PostgreSQL to ensure only enrolled students (or admins) can watch lesson videos and access course content.
 
 ### 3. Interceptors (`src/common/interceptors/`)
-* **`TransformInterceptor`**: Registered globally in `main.ts`. Automatically standardizes all API responses into:
+* **`TransformInterceptor`**: Registered globally in `main.ts`. Automatically standardizes all successful API responses into:
   ```json
   {
     "success": true,
     "statusCode": 200,
     "data": { ... },
-    "timestamp": "2026-10-22T12:00:00.000Z"
+    "timestamp": "2026-10-23T12:00:00.000Z"
   }
   ```
-* **`TimingInterceptor`**: Registered globally. Uses RxJS `tap()` to measure execution speed in milliseconds without altering the response data.
+* **`TimingInterceptor`**: Registered globally. Uses RxJS `tap()` to measure execution speed in milliseconds without altering response data.
 
-### 4. Caching & Performance (`src/redis/`)
-* Courses are cached in Redis RAM with a 5-minute TTL.
-* **Automatic Cache Invalidation**: Creating, updating, or deleting courses clears the Redis cache immediately so users always see fresh data.
-* Atomic `incr()` helper ready for rate-limiting.
+### 4. Exception Filters (`src/common/filters/`)
+* **`AllExceptionsFilter`**: Registered globally in `main.ts`. Catches all HTTP errors and unhandled exceptions, formatting them into the exact same structure as success responses:
+  ```json
+  {
+    "success": false,
+    "statusCode": 404,
+    "message": "Course with ID 99 not found.",
+    "path": "/courses/99",
+    "timestamp": "2026-10-23T12:00:00.000Z"
+  }
+  ```
+
+### 5. High-Performance Redis Auth Engine (`src/auth/`)
+* **Redis OTP Storage**: Both registration and login OTPs are stored in Redis RAM with automatic 5-minute (300s) TTL expiration, keeping PostgreSQL completely free of temporary clutter.
+* **Defense-in-Depth Rate Limiting**:
+  - **Outer Wall (Guard)**: IP-level throttle on `/auth/login` and `/auth/send-register-otp`.
+  - **Inner Wall (Service)**: Per-email rate limiting (max 3 OTP requests per email in 5 minutes) to prevent email-bombing attacks via proxies/VPNs.
+* **Single-Use Security**: OTPs are deleted from Redis immediately upon successful verification.
 
 ---
 
 ## 📡 API Modules & Endpoints
 
 ### 🔐 Authentication (`/auth`)
-| Method | Endpoint | Description | Access |
+| Method | Endpoint | Description | Access / Rate Limit |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/auth/send-register-otp` | Sends registration OTP via email | Public |
+| `POST` | `/auth/send-register-otp` | Sends registration OTP via email | Public (Max 3 / min) |
 | `POST` | `/auth/register` | Verifies OTP, hashes password & registers user | Public |
-| `POST` | `/auth/login` | Validates credentials & triggers 2FA OTP | Public |
+| `POST` | `/auth/login` | Validates credentials & triggers 2FA OTP | Public (Max 5 / min) |
 | `POST` | `/auth/verify-login-otp` | Verifies OTP & returns JWT access token | Public |
 
 ### 👤 Users (`/users`)
@@ -103,6 +122,15 @@ Outgoing Response
 | `PATCH`| `/courses/:id` | Update course (Clears cache) | Admin |
 | `DELETE`| `/courses/:id`| Delete course (Clears cache) | Admin |
 | `POST` | `/courses/:id/assign` | Assign course to student by email | Admin |
+
+### 📖 Course Lessons (`/courses/:courseId/lessons`)
+| Method | Endpoint | Description | Access |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/courses/:courseId/lessons` | View syllabus (titles & order only) | Public |
+| `GET` | `/courses/:courseId/lessons/:lessonId` | Watch lesson (full details + video URL) | Enrolled Student (`IsEnrolledGuard`) / Admin |
+| `POST` | `/courses/:courseId/lessons` | Add a lesson chapter to a course | Admin |
+| `PATCH`| `/courses/:courseId/lessons/:lessonId` | Update lesson content or video URL | Admin |
+| `DELETE`| `/courses/:courseId/lessons/:lessonId` | Delete a lesson from a course | Admin |
 
 ---
 
@@ -155,10 +183,10 @@ npm run start:prod
 
 ---
 
-## 🗺️ Upcoming Roadmap
+## 🗺️ Roadmap Progress
 
-* [ ] **Step 1:** Global Exception Filter (standardizing all error responses).
-* [ ] **Step 2:** Custom Redis Rate-Limiter Guard (stopping OTP & auth spam).
-* [ ] **Step 3:** Course Lessons Feature & `IsEnrolledGuard` (chapters, videos, progress tracking).
+* [x] **Step 1:** Global Exception Filter (standardizing all error responses).
+* [x] **Step 2:** Custom Redis Rate-Limiter Guard & Redis Auth Optimization.
+* [x] **Step 3:** Course Lessons Feature & `IsEnrolledGuard` (chapters, videos, syllabus).
 * [ ] **Step 4:** Course Reviews & Ratings System (1–5 stars and student feedback).
 * [ ] **Step 5:** Cloudinary & Multer File Uploads (course thumbnails and user avatars).
