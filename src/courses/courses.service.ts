@@ -7,6 +7,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { CreateCourseDto, UpdateCourseDto, AssignCourseDto } from './dto/course.dto.js';
+import 'multer';
+import { CloudinaryService } from '../cloudinary/cloudinary.service.js';
 
 @Injectable()
 export class CoursesService {
@@ -19,7 +21,8 @@ export class CoursesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
-  ) {}
+    private readonly cloudinary: CloudinaryService,
+  ) { }
 
   // 📖 PUBLIC: Get all courses (Cached in Redis)
   async findAll() {
@@ -144,4 +147,30 @@ export class CoursesService {
 
     return { message: `Course assigned to ${dto.studentEmail} successfully.` };
   }
+  // 📸 ADMIN: Upload thumbnail to Cloudinary & update course
+  async uploadThumbnail(courseId: number, file: Express.Multer.File) {
+    // 1. Ensure course exists
+    await this.findOne(courseId);
+
+    // 2. Upload file to Cloudinary in 'courses' folder
+    const uploadResult = await this.cloudinary.uploadImage(file, 'courses');
+
+    // 3. Save the secure HTTPS URL to PostgreSQL
+    const updatedCourse = await this.prisma.course.update({
+      where: { id: courseId },
+      data: { thumbnailUrl: uploadResult.secure_url },
+    });
+
+    // 4. Invalidate Redis cache so new thumbnail is served immediately
+    await this.redis.del(this.ALL_COURSES_KEY);
+    await this.redis.del(`courses:${courseId}`);
+    this.logger.log(`🧹 Cache cleared for course #${courseId} after thumbnail upload`);
+
+    return {
+      message: 'Thumbnail uploaded successfully!',
+      thumbnailUrl: uploadResult.secure_url,
+      course: updatedCourse,
+    };
+  }
+
 }

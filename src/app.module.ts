@@ -8,8 +8,11 @@ import { CoursesModule } from './courses/courses.module.js';
 import { UsersModule } from './users/users.module.js';
 import { LoggerMiddleware } from './common/middleware/logger.middleware.js';
 import { LessonsModule } from './lessons/lessons.module.js';
+import { ReviewsModule } from './reviews/reviews.module.js';
+import { CloudinaryModule } from './cloudinary/cloudinary.module.js';
+
 @Module({
-  imports: [PrismaModule, RedisModule, AuthModule, CoursesModule, UsersModule, LessonsModule],
+  imports: [PrismaModule, RedisModule, AuthModule, CoursesModule, UsersModule, LessonsModule, ReviewsModule, CloudinaryModule],
   controllers: [AppController],
   providers: [AppService],
 })
