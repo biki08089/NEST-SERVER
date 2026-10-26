@@ -26,6 +26,8 @@ model User {
 
  
   enrollments Enrollment[]
+  reviews     Review[]
+
 }
 
 // 3. OTP table for authentication
@@ -45,10 +47,13 @@ model Course {
   price       Float        @default(0.0)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
+ thumbnailUrl String?  
 
   // Relations
   enrollments Enrollment[]
   lessons     Lesson[]    
+  reviews     Review[]
+
 }
 
 // 5. Enrollment: Links a student to an assigned course
@@ -76,3 +81,19 @@ model Lesson {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+// 7. Course Reviews & Ratings
+model Review {
+  id        Int      @id @default(autoincrement())
+  rating    Int      // 1 to 5 stars
+  comment   String?  // Optional written review
+  userId    Int
+  courseId  Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, courseId])
+}
+
